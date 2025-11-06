@@ -73,6 +73,19 @@ def send_telegram_message(chat_id: int, text: str):
     response = requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
     return response.json()
 
+def request_contact(chat_id: int, text: str):
+    """Send a button to request user's contact."""
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": {
+            "keyboard": [[{"text": "Share my contact", "request_contact": True}]],
+            "one_time_keyboard": True,
+            "resize_keyboard": True
+        }
+    }
+    requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
+
 def generate_otp(length=6):
     return ''.join(random.choices(string.digits, k=length))
 
@@ -142,8 +155,8 @@ async def telegram_webhook(update: TelegramUpdate):
 
         # Normal linking (first time)
         supabase.table("user").update({"chat_id": chat_id}).eq("email", email).execute()
-        send_telegram_message(chat_id, f"Hello {email}! Your bot is now linked and active ✅")
-        return {"status": "linked"}
+        request_contact(chat_id, f"Hello {email}! Your bot is now linked ✅\nPlease share your contact to complete setup.")
+        return {"status": "linked, awaiting contact"}
 
     # ------------------------------
     # Step 2: Handle Yes/No unlink confirmation
@@ -177,7 +190,7 @@ async def telegram_webhook(update: TelegramUpdate):
     if otp_request.data:
         req = otp_request.data[0]
         supabase.table("user_link_requests").update({"status": "await_contact"}).eq("id", req["id"]).execute()
-        send_telegram_message(chat_id, f"OTP verified ✅. Please share your contact (phone number) with the bot to complete linking.")
+        request_contact(chat_id, "OTP verified ✅\nPlease share your contact to complete linking.")
         return {"status": "awaiting contact"}
 
     # ------------------------------
