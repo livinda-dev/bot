@@ -1,26 +1,12 @@
-# FastAPI server
 fastapi==0.115.2
 uvicorn==0.32.1
-
-# HTTP requests
 requests==2.32.3
-httpx==0.28.1
-anyio==4.11.0
-
-# Environment variables
 python-dotenv==1.0.1
-
-# Supabase client
 supabase==2.5.1
-
-# Telegram bot
 python-telegram-bot==20.8
-
-# Google API (for sending email via OAuth2)
 google-api-python-client==2.186.0
 google-auth==2.41.0
 google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
-
-# Data validation
 pydantic==2.12.3
+anyio==4.11.0
