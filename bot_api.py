@@ -21,7 +21,11 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-GOOGLE_TOKEN_JSON_CONTENT = os.getenv("GOOGLE_TOKEN_JSON")  # full JSON content from Render secret
+GOOGLE_TOKEN_JSON_PATH = "/etc/secrets/GOOGLE_TOKEN_JSON"
+
+with open(GOOGLE_TOKEN_JSON_PATH, "r") as f:
+    GOOGLE_TOKEN_JSON_CONTENT = f.read()
+
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
