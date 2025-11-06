@@ -10,7 +10,7 @@ from supabase import create_client
 from dotenv import load_dotenv
 
 import json
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 load_dotenv()
@@ -25,16 +25,25 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # ------------------------------
-# Google Email Setup
+# Google Email Setup (OAuth token via ENV)
 # ------------------------------
-# The path to the secret file on Render
-GOOGLE_TOKEN_JSON_PATH = "/etc/secrets/token.json"
+# Store your token JSON in Render as an environment variable: GOOGLE_TOKEN_JSON
+# Example: '{"token": "...", "refresh_token": "...", "client_id": "...", "client_secret": "...", "token_uri": "...", "scopes": ["https://www.googleapis.com/auth/gmail.send"]}'
+token_data = json.loads(os.environ["GOOGLE_TOKEN_JSON"])
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
-# Load credentials directly from the secret file
-credentials = service_account.Credentials.from_service_account_file(
-    GOOGLE_TOKEN_JSON_PATH, scopes=SCOPES
+
+# Create Credentials object from OAuth token
+credentials = Credentials(
+    token=token_data["token"],
+    refresh_token=token_data.get("refresh_token"),
+    client_id=token_data.get("client_id"),
+    client_secret=token_data.get("client_secret"),
+    token_uri=token_data.get("token_uri"),
+    scopes=SCOPES
 )
+
+# Build Gmail API client
 gmail_service = build("gmail", "v1", credentials=credentials)
 
 def send_email(to_email: str, subject: str, body: str):
@@ -123,14 +132,12 @@ async def telegram_webhook(update: TelegramUpdate):
         email = parts[1]
         result = supabase.table("user").select("*").eq("email", email).execute()
         if not result.data:
-            # Email not exist → send registration URL
             send_telegram_message(chat_id, "Email not registered. Please register here: https://my-next-hgkfl4ycg-livindas-projects.vercel.app")
             return {"status": "email not found"}
 
         user = result.data[0]
         current_chat_id = user.get("chat_id")
         if current_chat_id and current_chat_id != chat_id:
-            # Already linked to another Telegram account → ask to confirm change
             otp = generate_otp()
             supabase.table("user_link_requests").insert({
                 "email": email,
@@ -140,10 +147,9 @@ async def telegram_webhook(update: TelegramUpdate):
                 "created_at": datetime.utcnow().isoformat()
             }).execute()
             send_email(email, "Your OTP Code", f"Use this OTP to confirm linking your Telegram: {otp}")
-            send_telegram_message(chat_id, "This email is already linked with another Telegram account. Do you want to update it? Please enter the OTP sent to your email.")
+            send_telegram_message(chat_id, "This email is already linked with another Telegram account. Please enter the OTP sent to your email.")
             return {"status": "otp sent"}
 
-        # Normal linking
         supabase.table("user").update({"chat_id": chat_id}).eq("email", email).execute()
         send_telegram_message(chat_id, f"Hello {email}! Your bot is now linked and active ✅")
         return {"status": "linked"}
@@ -160,9 +166,6 @@ async def telegram_webhook(update: TelegramUpdate):
         send_email(req["email"], "Telegram Linked", f"Your Telegram account has been linked to your email {req['email']}.")
         return {"status": "otp verified"}
 
-    # ------------------------------
-    # Default reply
-    # ------------------------------
     send_telegram_message(chat_id, f"You said: {text}")
     return {"status": "ok"}
 
