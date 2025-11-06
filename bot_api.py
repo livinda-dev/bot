@@ -1,5 +1,6 @@
 # bot_api.py
 import os
+import random
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -14,7 +15,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -39,22 +39,29 @@ class TelegramUpdate(BaseModel):
 # Helper Functions
 # ------------------------------
 def send_telegram_message(chat_id: int, text: str):
-    """Send a message via Telegram."""
     payload = {"chat_id": chat_id, "text": text}
-    response = requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
-    return response.json()
+    return requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload).json()
+
+def generate_otp():
+    return str(random.randint(100000, 999999))
 
 def link_telegram_to_user(chat_id: int, email: str):
-    """Update Supabase user with Telegram chat_id."""
     supabase.table("user").update({"chat_id": chat_id}).eq("email", email).execute()
+
+def store_otp(email: str, otp: str):
+    """Save OTP in Supabase or in-memory table."""
+    supabase.table("otp").upsert({"email": email, "otp": otp}).execute()
+
+def verify_otp(email: str, otp: str) -> bool:
+    result = supabase.table("otp").select("*").eq("email", email).eq("otp", otp).execute()
+    return bool(result.data)
 
 # ------------------------------
 # Routes
 # ------------------------------
 @app.post("/send-message")
 def send_message(req: MessageRequest):
-    """Send message to user by email (and Telegram if linked)."""
-    # Look up user by email in Supabase
+    """Send message via Telegram (and email if needed)."""
     result = supabase.table("user").select("*").eq("email", req.email).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="User not found")
@@ -66,17 +73,13 @@ def send_message(req: MessageRequest):
     if chat_id:
         telegram_resp = send_telegram_message(chat_id, req.message)
 
-    # TODO: Send email if needed here
+    # TODO: add email sending via Google API here
 
-    return {
-        "status": "success",
-        "chat_id": chat_id,
-        "telegram_response": telegram_resp
-    }
+    return {"status": "success", "chat_id": chat_id, "telegram_response": telegram_resp}
 
 @app.post("/webhook")
 async def telegram_webhook(update: TelegramUpdate):
-    """Handle incoming updates from Telegram."""
+    """Handle Telegram updates and maintain multi-step /start flow."""
     message = update.message or update.edited_message
     if not message:
         return {"status": "no message"}
@@ -85,14 +88,38 @@ async def telegram_webhook(update: TelegramUpdate):
     text = message.get("text", "")
 
     if text.startswith("/start"):
-        # If user provides email like /start user@example.com
         parts = text.split(" ")
         if len(parts) == 2:
             email = parts[1]
-            link_telegram_to_user(chat_id, email)
-            send_telegram_message(chat_id, f"Hello {email}! Your bot is now linked and active ✅")
+            # Check if email exists
+            result = supabase.table("user").select("*").eq("email", email).execute()
+            if not result.data:
+                send_telegram_message(chat_id, "Email not found. Please register first.")
+                return {"status": "email not found"}
+
+            user = result.data[0]
+            if user.get("chat_id"):
+                send_telegram_message(chat_id, "This email is already linked with another Telegram account.")
+                return {"status": "already linked"}
+
+            otp = generate_otp()
+            store_otp(email, otp)
+            send_telegram_message(chat_id, f"Your OTP is: {otp}. Please reply with /verify {email} <OTP>")
         else:
             send_telegram_message(chat_id, "Please link your account by typing: /start your_email@example.com")
+
+    elif text.startswith("/verify"):
+        parts = text.split(" ")
+        if len(parts) == 3:
+            email, otp = parts[1], parts[2]
+            if verify_otp(email, otp):
+                link_telegram_to_user(chat_id, email)
+                send_telegram_message(chat_id, f"✅ Email {email} successfully linked to Telegram!")
+            else:
+                send_telegram_message(chat_id, "❌ Invalid OTP. Please try again.")
+        else:
+            send_telegram_message(chat_id, "Usage: /verify your_email@example.com <OTP>")
+
     else:
         send_telegram_message(chat_id, f"You said: {text}")
 
