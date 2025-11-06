@@ -8,10 +8,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
-
 import json
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from email.mime.text import MIMEText
+import base64
 
 load_dotenv()
 
@@ -27,13 +28,9 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # ------------------------------
 # Google Email Setup (OAuth token via ENV)
 # ------------------------------
-# Store your token JSON in Render as an environment variable: GOOGLE_TOKEN_JSON
-# Example: '{"token": "...", "refresh_token": "...", "client_id": "...", "client_secret": "...", "token_uri": "...", "scopes": ["https://www.googleapis.com/auth/gmail.send"]}'
 token_data = json.loads(os.environ["GOOGLE_TOKEN_JSON"])
-
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-# Create Credentials object from OAuth token
 credentials = Credentials(
     token=token_data["token"],
     refresh_token=token_data.get("refresh_token"),
@@ -42,14 +39,9 @@ credentials = Credentials(
     token_uri=token_data.get("token_uri"),
     scopes=SCOPES
 )
-
-# Build Gmail API client
 gmail_service = build("gmail", "v1", credentials=credentials)
 
 def send_email(to_email: str, subject: str, body: str):
-    from email.mime.text import MIMEText
-    import base64
-
     message = MIMEText(body)
     message["to"] = to_email
     message["subject"] = subject
@@ -104,14 +96,12 @@ def send_message(req: MessageRequest):
     if chat_id:
         telegram_resp = send_telegram_message(chat_id, req.message)
     
-    # Optional: send email as well
     send_email(req.email, "New Message from Bot", req.message)
-    
     return {"status": "success", "chat_id": chat_id, "telegram_response": telegram_resp}
 
 @app.post("/webhook")
 async def telegram_webhook(update: TelegramUpdate):
-    cleanup_expired_requests()  # remove old OTP requests
+    cleanup_expired_requests()
     
     message = update.message or update.edited_message
     if not message:
@@ -119,9 +109,10 @@ async def telegram_webhook(update: TelegramUpdate):
 
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
+    contact = message.get("contact", {})
 
     # ------------------------------
-    # Handle /start linking
+    # Step 1: Handle /start linking
     # ------------------------------
     if text.startswith("/start"):
         parts = text.split(" ")
@@ -129,7 +120,7 @@ async def telegram_webhook(update: TelegramUpdate):
             send_telegram_message(chat_id, "Please link your account by typing: /start your_email@example.com")
             return {"status": "waiting for email"}
 
-        email = parts[1]
+        email = parts[1].strip()
         result = supabase.table("user").select("*").eq("email", email).execute()
         if not result.data:
             send_telegram_message(chat_id, "Email not registered. Please register here: https://my-next-hgkfl4ycg-livindas-projects.vercel.app")
@@ -137,35 +128,82 @@ async def telegram_webhook(update: TelegramUpdate):
 
         user = result.data[0]
         current_chat_id = user.get("chat_id")
+
         if current_chat_id and current_chat_id != chat_id:
-            otp = generate_otp()
+            # Ask for unlink confirmation
             supabase.table("user_link_requests").insert({
                 "email": email,
                 "new_chat_id": chat_id,
-                "otp": otp,
-                "status": "pending",
+                "status": "confirm_unlink",
                 "created_at": datetime.utcnow().isoformat()
             }).execute()
-            send_email(email, "Your OTP Code", f"Use this OTP to confirm linking your Telegram: {otp}")
-            send_telegram_message(chat_id, "This email is already linked with another Telegram account. Please enter the OTP sent to your email.")
-            return {"status": "otp sent"}
+            send_telegram_message(chat_id, "This email is already linked with another Telegram account. Do you want to unlink it? (Yes/No)")
+            return {"status": "waiting unlink confirmation"}
 
+        # Normal linking (first time)
         supabase.table("user").update({"chat_id": chat_id}).eq("email", email).execute()
         send_telegram_message(chat_id, f"Hello {email}! Your bot is now linked and active ✅")
         return {"status": "linked"}
 
     # ------------------------------
-    # Handle OTP verification
+    # Step 2: Handle Yes/No unlink confirmation
     # ------------------------------
-    result = supabase.table("user_link_requests").select("*").eq("otp", text).eq("status", "pending").execute()
-    if result.data:
-        req = result.data[0]
-        supabase.table("user").update({"chat_id": req["new_chat_id"]}).eq("email", req["email"]).execute()
-        supabase.table("user_link_requests").update({"status": "completed"}).eq("id", req["id"]).execute()
-        send_telegram_message(chat_id, f"Your Telegram has been linked to {req['email']} successfully ✅")
-        send_email(req["email"], "Telegram Linked", f"Your Telegram account has been linked to your email {req['email']}.")
-        return {"status": "otp verified"}
+    pending_request = supabase.table("user_link_requests").select("*").eq("new_chat_id", chat_id).eq("status", "confirm_unlink").execute()
+    if pending_request.data:
+        req = pending_request.data[0]
+        email = req["email"]
+        if text.lower() == "yes":
+            otp = generate_otp()
+            supabase.table("user_link_requests").update({
+                "otp": otp,
+                "status": "pending",
+                "created_at": datetime.utcnow().isoformat()
+            }).eq("id", req["id"]).execute()
+            send_email(email, "Your OTP Code", f"Use this OTP to confirm unlinking and linking your Telegram: {otp}")
+            send_telegram_message(chat_id, "OTP sent to your email. Please enter the OTP to continue.")
+            return {"status": "otp sent"}
+        elif text.lower() == "no":
+            supabase.table("user_link_requests").delete().eq("id", req["id"]).execute()
+            send_telegram_message(chat_id, "Unlink request cancelled.")
+            return {"status": "unlink cancelled"}
+        else:
+            send_telegram_message(chat_id, "Please reply Yes or No.")
+            return {"status": "waiting unlink confirmation"}
 
+    # ------------------------------
+    # Step 3: Handle OTP verification
+    # ------------------------------
+    otp_request = supabase.table("user_link_requests").select("*").eq("otp", text).eq("status", "pending").execute()
+    if otp_request.data:
+        req = otp_request.data[0]
+        supabase.table("user_link_requests").update({"status": "await_contact"}).eq("id", req["id"]).execute()
+        send_telegram_message(chat_id, f"OTP verified ✅. Please share your contact (phone number) with the bot to complete linking.")
+        return {"status": "awaiting contact"}
+
+    # ------------------------------
+    # Step 4: Handle contact sharing
+    # ------------------------------
+    contact_request = supabase.table("user_link_requests").select("*").eq("status", "await_contact").eq("new_chat_id", chat_id).execute()
+    if contact_request.data and contact.get("phone_number"):
+        req = contact_request.data[0]
+        email = req["email"]
+        phone_number = contact["phone_number"]
+
+        supabase.table("user").update({
+            "chat_id": chat_id,
+            "phone_number": phone_number
+        }).eq("email", email).execute()
+
+        supabase.table("user_link_requests").delete().eq("id", req["id"]).execute()
+
+        msg = f"Your contact has been updated successfully ✅\nEmail: {email}\nPhone: {phone_number}"
+        send_telegram_message(chat_id, msg)
+        send_email(email, "Telegram Linked & Contact Updated", msg)
+        return {"status": "contact updated"}
+
+    # ------------------------------
+    # Default reply
+    # ------------------------------
     send_telegram_message(chat_id, f"You said: {text}")
     return {"status": "ok"}
 
