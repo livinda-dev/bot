@@ -93,7 +93,7 @@ async def telegram_webhook(update: dict):
 
         # 🔥 Send chat_id + email to your Next.js backend
         requests.post(
-            "https://my-next-app-git-development-livindas-projects.vercel.app//api/bots/save_chat_id",
+            "https://my-next-app-git-development-livindas-projects.vercel.app/api/bots/save_chat_id",
             json={"email": email, "chat_id": chat_id}
         )
 
