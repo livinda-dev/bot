@@ -1,5 +1,4 @@
-# bot_api.py (clean version – linking done by your web)
-
+# bot_api.py — FINAL UPDATED VERSION
 import os
 import requests
 from fastapi import FastAPI
@@ -14,6 +13,9 @@ import base64
 
 load_dotenv()
 
+# ---------------------------------------
+# Config
+# ---------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -21,8 +23,11 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Gmail
+# ---------------------------------------
+# Gmail Setup
+# ---------------------------------------
 token_data = json.loads(os.environ["GOOGLE_TOKEN_JSON"])
+
 credentials = Credentials(
     token=token_data["token"],
     refresh_token=token_data.get("refresh_token"),
@@ -31,15 +36,24 @@ credentials = Credentials(
     token_uri=token_data.get("token_uri"),
     scopes=["https://www.googleapis.com/auth/gmail.send"]
 )
+
 gmail_service = build("gmail", "v1", credentials=credentials)
+
 
 def send_email(to_email: str, subject: str, body: str):
     message = MIMEText(body)
     message["to"] = to_email
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    gmail_service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    gmail_service.users().messages().send(
+        userId="me",
+        body={"raw": raw}
+    ).execute()
 
+
+# ---------------------------------------
+# FastAPI App
+# ---------------------------------------
 app = FastAPI()
 
 
@@ -48,8 +62,12 @@ class MessageRequest(BaseModel):
     message: str
 
 
+# ---------------------------------------
+# API: Send message manually
+# ---------------------------------------
 @app.post("/send-message")
-def send_message(req: MessageRequest):
+def send_message_api(req: MessageRequest):
+
     result = supabase.table("user").select("*").eq("email", req.email).single().execute()
     if not result.data:
         return {"error": "Email not found"}
@@ -57,50 +75,72 @@ def send_message(req: MessageRequest):
     user = result.data
     chat_id = user.get("chat_id")
 
+    # Send Telegram message if chat linked
     if chat_id:
         requests.post(
             f"{TELEGRAM_API_URL}/sendMessage",
             json={"chat_id": chat_id, "text": req.message}
         )
 
-    send_email(req.email, "New Message", req.message)
+    # Always send email
+    send_email(req.email, "New Message from TAMDAN", req.message)
+
     return {"status": "sent"}
 
 
 # ---------------------------------------
-# TELEGRAM WEBHOOK – ONLY HANDLE /start
+# TELEGRAM WEBHOOK
 # ---------------------------------------
 @app.post("/webhook")
 async def telegram_webhook(update: dict):
+
     message = update.get("message") or update.get("edited_message")
     if not message:
         return {"status": "no message"}
 
     chat_id = message["chat"]["id"]
-    text = message.get("text", "")
+    text = message.get("text", "").strip()
 
-    # Only accept /start email
+    # -------------------------------
+    # Handle /start and /startapp
+    # -------------------------------
     if text.startswith("/start") or text.startswith("/startapp"):
-        parts = text.split(" ")
-        if len(parts) != 2:
-            send_message("Usage error...")
-            return
+        payload = text.split(" ", 1)
 
-        email = parts[1].strip()
+        if len(payload) == 1:
+            # User clicked START manually (Desktop)
+            requests.post(
+                f"{TELEGRAM_API_URL}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "Welcome! Please go back to the website and click the Telegram button to link your account."
+                }
+            )
+            return {"status": "start_without_payload"}
 
-        # 🔥 Send chat_id + email to your Next.js backend
+        # Extract email from payload
+        email = payload[1].strip()
+
+        # Save chat_id to your Next.js backend
         requests.post(
             "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
             json={"email": email, "chat_id": chat_id}
         )
 
+        # Notify user
         requests.post(
             f"{TELEGRAM_API_URL}/sendMessage",
-            json={"chat_id": chat_id, "text": "Linked successfully! You can close Telegram now."}
+            json={
+                "chat_id": chat_id,
+                "text": "Your Telegram is now linked successfully! 🎉"
+            }
         )
+
         return {"status": "linked"}
 
-    # Default echo
+    # -------------------------------
+    # Default Echo
+    # -------------------------------
     requests.post(
         f"{TELEGRAM_API_URL}/sendMessage",
         json={"chat_id": chat_id, "text": f"You said: {text}"}
@@ -110,4 +150,4 @@ async def telegram_webhook(update: dict):
 
 @app.get("/")
 async def root():
-    return {"message": "Bot running"}
+    return {"message": "TAMDAN Telegram bot is running 🎉"}
