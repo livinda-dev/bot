@@ -80,13 +80,10 @@ async def telegram_webhook(update: dict):
     text = message.get("text", "")
 
     # Only accept /start email
-    if text.startswith("/start"):
+    if text.startswith("/start") or text.startswith("/startapp"):
         parts = text.split(" ")
         if len(parts) != 2:
-            requests.post(
-                f"{TELEGRAM_API_URL}/sendMessage",
-                json={"chat_id": chat_id, "text": "Usage: /start your_email@example.com"}
-            )
+            send_message("Usage error...")
             return
 
         email = parts[1].strip()
