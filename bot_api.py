@@ -1,4 +1,4 @@
-# bot_api.py – SIMPLE /start VERSION
+# bot_api.py – SIMPLE /start VERSION + EMAIL CHECK
 
 import os
 import requests
@@ -92,21 +92,47 @@ async def telegram_webhook(update: dict):
     if text.startswith("/start"):
         parts = text.split(" ", 1)
 
-        # Case 1: /start email@example.com  (mobile deep link)
+        # Case 1: /start email@example.com
         if len(parts) == 2:
-            email = parts[1].strip()
+            email = parts[1].strip().lower()
 
-            # send to Next.js to save chat_id
+            # ✔ CHECK IF EMAIL EXISTS IN SUPABASE
+            check = (
+                supabase.table("user")
+                .select("*")
+                .eq("email", email)
+                .maybe_single()
+                .execute()
+            )
+
+            if not check.data:
+                # ❌ Email not found → send login link
+                requests.post(
+                    f"{TELEGRAM_API_URL}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            f"❌ The email *{email}* is not registered.\n\n"
+                            "Please log in here first:\n"
+                            "https://my-next-app-seven-delta.vercel.app/"
+                        ),
+                        "parse_mode": "Markdown",
+                    },
+                )
+                return {"status": "email_not_found"}
+
+            # ✔ EMAIL EXISTS → continue linking
             requests.post(
                 "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
                 json={"email": email, "chat_id": chat_id},
             )
 
+            # Success message
             requests.post(
                 f"{TELEGRAM_API_URL}/sendMessage",
                 json={
                     "chat_id": chat_id,
-                    "text": "Linked successfully! You can close Telegram now.",
+                    "text": "✅ Linked successfully! You can close Telegram now.",
                 },
             )
             return {"status": "linked"}
