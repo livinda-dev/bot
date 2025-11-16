@@ -1,4 +1,4 @@
-# bot_api.py – SIMPLE /start VERSION + EMAIL CHECK
+# bot_api.py – STABLE VERSION WITH EMAIL CHECK + LINKING
 
 import os
 import requests
@@ -62,6 +62,7 @@ def send_message(req: MessageRequest):
         .single()
         .execute()
     )
+
     if not result.data:
         return {"error": "Email not found"}
 
@@ -86,27 +87,40 @@ async def telegram_webhook(update: dict):
         return {"status": "no message"}
 
     chat_id = message["chat"]["id"]
-    text = (message.get("text") or "").strip()
+    text = (message.get("text") or "").strip().lower()
 
-    # Handle /start and /start email
+    # -------- Handle /start and /start email --------
     if text.startswith("/start"):
         parts = text.split(" ", 1)
 
-        # Case 1: /start email@example.com
+        # -------------------------------------------------
+        # CASE 1: User clicked mobile deep-link → /start email
+        # -------------------------------------------------
         if len(parts) == 2:
             email = parts[1].strip().lower()
 
-            # ✔ CHECK IF EMAIL EXISTS IN SUPABASE
-            check = (
-                supabase.table("user")
-                .select("*")
-                .eq("email", email)
-                .maybe_single()
-                .execute()
-            )
+            # -------- SAFE EMAIL CHECK (NO CRASH) --------
+            try:
+                check = (
+                    supabase.table("user")
+                    .select("*")
+                    .eq("email", email)
+                    .maybe_single()
+                    .execute()
+                )
+            except Exception as e:
+                # Supabase unavailable
+                requests.post(
+                    f"{TELEGRAM_API_URL}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": "⚠️ Server error while checking your email. Please try again.",
+                    },
+                )
+                return {"status": "db_error"}
 
-            if not check.data:
-                # ❌ Email not found → send login link
+            # User not found
+            if not check or not getattr(check, "data", None):
                 requests.post(
                     f"{TELEGRAM_API_URL}/sendMessage",
                     json={
@@ -121,13 +135,13 @@ async def telegram_webhook(update: dict):
                 )
                 return {"status": "email_not_found"}
 
-            # ✔ EMAIL EXISTS → continue linking
+            # -------- SAVE chat_id to Next.js API --------
             requests.post(
                 "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
                 json={"email": email, "chat_id": chat_id},
             )
 
-            # Success message
+            # Confirmation message
             requests.post(
                 f"{TELEGRAM_API_URL}/sendMessage",
                 json={
@@ -137,14 +151,16 @@ async def telegram_webhook(update: dict):
             )
             return {"status": "linked"}
 
-        # Case 2: bare /start (desktop user clicked Start manually)
+        # -------------------------------------------------
+        # CASE 2: Desktop user clicked Start manually
+        # -------------------------------------------------
         requests.post(
             f"{TELEGRAM_API_URL}/sendMessage",
             json={
                 "chat_id": chat_id,
                 "text": (
-                    "Welcome to TAMDAN 👋\n\n"
-                    "To link your account, please send:\n"
+                    "👋 Welcome to TAMDAN!\n\n"
+                    "To link your account, please send your email:\n"
                     "`/start your_email@example.com`"
                 ),
                 "parse_mode": "Markdown",
@@ -152,7 +168,7 @@ async def telegram_webhook(update: dict):
         )
         return {"status": "start_no_email"}
 
-    # Default echo
+    # -------- Default echo --------
     requests.post(
         f"{TELEGRAM_API_URL}/sendMessage",
         json={"chat_id": chat_id, "text": f"You said: {text}"},
