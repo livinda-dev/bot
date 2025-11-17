@@ -1,4 +1,4 @@
-# bot_api.py – STABLE VERSION WITH EMAIL CHECK + LINKING
+# bot_api.py – FIXED VERSION (email case preserved, stable linking)
 
 import os
 import requests
@@ -39,9 +39,7 @@ def send_email(to_email: str, subject: str, body: str):
     message["to"] = to_email
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    gmail_service.users().messages().send(
-        userId="me", body={"raw": raw}
-    ).execute()
+    gmail_service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
 
 # ---------- FastAPI ----------
@@ -87,39 +85,36 @@ async def telegram_webhook(update: dict):
         return {"status": "no message"}
 
     chat_id = message["chat"]["id"]
-    text = (message.get("text") or "").strip().lower()
 
-    # -------- Handle /start and /start email --------
-    if text.startswith("/start"):
-        parts = text.split(" ", 1)
+    # IMPORTANT: do NOT lowercase the email!
+    raw_text = (message.get("text") or "").strip()
+    cmd_lower = raw_text.lower()
 
-        # -------------------------------------------------
-        # CASE 1: User clicked mobile deep-link → /start email
-        # -------------------------------------------------
+    # -------- Handle /start --------
+    if cmd_lower.startswith("/start"):
+        parts = raw_text.split(" ", 1)
+
+        # -------------------------------
+        # CASE 1: /start email
+        # -------------------------------
         if len(parts) == 2:
-            email = parts[1].strip().lower()
+            email = parts[1].strip()
 
-            # -------- SAFE EMAIL CHECK (NO CRASH) --------
             try:
                 check = (
                     supabase.table("user")
                     .select("*")
-                    .eq("email", email)
+                    .eq("email", email)  # exact match
                     .maybe_single()
                     .execute()
                 )
-            except Exception as e:
-                # Supabase unavailable
+            except:
                 requests.post(
                     f"{TELEGRAM_API_URL}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "⚠️ Server error while checking your email. Please try again.",
-                    },
+                    json={"chat_id": chat_id, "text": "⚠️ Server error, try again."},
                 )
                 return {"status": "db_error"}
 
-            # User not found
             if not check or not getattr(check, "data", None):
                 requests.post(
                     f"{TELEGRAM_API_URL}/sendMessage",
@@ -127,7 +122,7 @@ async def telegram_webhook(update: dict):
                         "chat_id": chat_id,
                         "text": (
                             f"❌ The email *{email}* is not registered.\n\n"
-                            "Please log in here first:\n"
+                            "Please log in first:\n"
                             "https://my-next-app-seven-delta.vercel.app/"
                         ),
                         "parse_mode": "Markdown",
@@ -135,25 +130,21 @@ async def telegram_webhook(update: dict):
                 )
                 return {"status": "email_not_found"}
 
-            # -------- SAVE chat_id to Next.js API --------
+            # Save chat_id
             requests.post(
                 "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
                 json={"email": email, "chat_id": chat_id},
             )
 
-            # Confirmation message
             requests.post(
                 f"{TELEGRAM_API_URL}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": "✅ Linked successfully! You can close Telegram now.",
-                },
+                json={"chat_id": chat_id, "text": "✅ Linked successfully!"},
             )
             return {"status": "linked"}
 
-        # -------------------------------------------------
-        # CASE 2: Desktop user clicked Start manually
-        # -------------------------------------------------
+        # -------------------------------
+        # CASE 2: bare /start (desktop)
+        # -------------------------------
         requests.post(
             f"{TELEGRAM_API_URL}/sendMessage",
             json={
@@ -171,11 +162,12 @@ async def telegram_webhook(update: dict):
     # -------- Default echo --------
     requests.post(
         f"{TELEGRAM_API_URL}/sendMessage",
-        json={"chat_id": chat_id, "text": f"You said: {text}"},
+        json={"chat_id": chat_id, "text": f"You said: {raw_text}"},
     )
+
     return {"status": "ok"}
 
 
 @app.get("/")
 async def root():
-    return {"message": "Telegram bot + Supabase API is running"}
+    return {"message": "Telegram bot is running"}
