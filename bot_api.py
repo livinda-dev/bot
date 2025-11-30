@@ -1,5 +1,3 @@
-# bot_api.py – FIXED VERSION (email case preserved, stable linking)
-
 import os
 import requests
 from fastapi import FastAPI
@@ -11,6 +9,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 import base64
+from datetime import datetime
 
 load_dotenv()
 
@@ -85,26 +84,93 @@ async def telegram_webhook(update: dict):
         return {"status": "no message"}
 
     chat_id = message["chat"]["id"]
-
-    # IMPORTANT: do NOT lowercase the email!
     raw_text = (message.get("text") or "").strip()
     cmd_lower = raw_text.lower()
 
-    # -------- Handle /start --------
+    # -------- Handle /start with TOKEN --------
     if cmd_lower.startswith("/start"):
         parts = raw_text.split(" ", 1)
 
-        # -------------------------------
-        # CASE 1: /start email
-        # -------------------------------
         if len(parts) == 2:
-            email = parts[1].strip()
+            token_or_email = parts[1].strip()
 
+            # Try token-based linking first (automatic from website)
+            if len(token_or_email) == 64:  # hex token is 64 chars
+                try:
+                    # Verify token
+                    token_result = (
+                        supabase.table("telegram_tokens")
+                        .select("*")
+                        .eq("token", token_or_email)
+                        .eq("used", False)
+                        .maybe_single()
+                        .execute()
+                    )
+
+                    if not token_result or not token_result.data:
+                        requests.post(
+                            f"{TELEGRAM_API_URL}/sendMessage",
+                            json={
+                                "chat_id": chat_id,
+                                "text": "❌ Invalid or expired link. Please try again from the website.",
+                            },
+                        )
+                        return {"status": "invalid_token"}
+
+                    token_data = token_result.data
+                    
+                    # Check expiration
+                    expires_at = datetime.fromisoformat(token_data["expires_at"].replace("Z", "+00:00"))
+                    if datetime.now(expires_at.tzinfo) > expires_at:
+                        requests.post(
+                            f"{TELEGRAM_API_URL}/sendMessage",
+                            json={
+                                "chat_id": chat_id,
+                                "text": "❌ Link expired. Please generate a new one from the website.",
+                            },
+                        )
+                        return {"status": "token_expired"}
+
+                    email = token_data["email"]
+
+                    # Mark token as used
+                    supabase.table("telegram_tokens").update({"used": True}).eq(
+                        "token", token_or_email
+                    ).execute()
+
+                    # Link chat_id to user
+                    requests.post(
+                        "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
+                        json={"email": email, "chat_id": chat_id},
+                    )
+
+                    requests.post(
+                        f"{TELEGRAM_API_URL}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": f"✅ Successfully linked to {email}!\n\nYou'll now receive news updates here.",
+                        },
+                    )
+                    return {"status": "linked_via_token"}
+
+                except Exception as e:
+                    print(f"Token verification error: {e}")
+                    requests.post(
+                        f"{TELEGRAM_API_URL}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": "⚠️ Server error. Please try again.",
+                        },
+                    )
+                    return {"status": "error"}
+
+            # Fallback: manual email linking (old method)
+            email = token_or_email
             try:
                 check = (
                     supabase.table("user")
                     .select("*")
-                    .eq("email", email)  # exact match
+                    .eq("email", email)
                     .maybe_single()
                     .execute()
                 )
@@ -142,22 +208,22 @@ async def telegram_webhook(update: dict):
             )
             return {"status": "linked"}
 
-        # -------------------------------
-        # CASE 2: bare /start (desktop)
-        # -------------------------------
+        # No parameter provided
         requests.post(
             f"{TELEGRAM_API_URL}/sendMessage",
             json={
                 "chat_id": chat_id,
                 "text": (
                     "👋 Welcome to TAMDAN!\n\n"
-                    "To link your account, please send your email:\n"
-                    "`/start your_email@example.com`"
+                    "To link your account:\n"
+                    "1. Log in at https://my-next-app-seven-delta.vercel.app/\n"
+                    "2. Click 'Connect with Telegram' in your profile\n\n"
+                    "Or manually send: `/start your_email@example.com`"
                 ),
                 "parse_mode": "Markdown",
             },
         )
-        return {"status": "start_no_email"}
+        return {"status": "start_no_param"}
 
     # -------- Default echo --------
     requests.post(
