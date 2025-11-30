@@ -87,9 +87,36 @@ async def telegram_webhook(update: dict):
     raw_text = (message.get("text") or "").strip()
     cmd_lower = raw_text.lower()
 
-    # -------- Handle /start with TOKEN --------
+    # -------- Handle /start --------
     if cmd_lower.startswith("/start"):
         parts = raw_text.split(" ", 1)
+
+        # Check if user is already linked
+        try:
+            existing_user = (
+                supabase.table("user")
+                .select("email")
+                .eq("chat_id", str(chat_id))
+                .maybe_single()
+                .execute()
+            )
+
+            if existing_user and existing_user.data:
+                # User already linked
+                requests.post(
+                    f"{TELEGRAM_API_URL}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": (
+                            f"✅ You're already connected to TAMDAN!\n\n"
+                            f"Linked email: {existing_user.data['email']}\n\n"
+                            "You'll receive news updates here automatically."
+                        ),
+                    },
+                )
+                return {"status": "already_linked"}
+        except Exception as e:
+            print(f"Error checking existing user: {e}")
 
         if len(parts) == 2:
             token_or_email = parts[1].strip()
@@ -208,7 +235,7 @@ async def telegram_webhook(update: dict):
             )
             return {"status": "linked"}
 
-        # No parameter provided
+        # No parameter provided - show welcome only if not already linked
         requests.post(
             f"{TELEGRAM_API_URL}/sendMessage",
             json={
