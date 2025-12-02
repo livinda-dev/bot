@@ -52,28 +52,32 @@ class MessageRequest(BaseModel):
 
 @app.post("/send-message")
 def send_message(req: MessageRequest):
-    result = (
+    user = (
         supabase.table("user")
-        .select("*")
+        .select("chat_id")
         .eq("email", req.email)
-        .single()
+        .maybe_single()
         .execute()
     )
 
-    if not result.data:
-        return {"error": "Email not found"}
+    if not user or not user.data:
+        return {"error": "Email not registered"}
 
-    user = result.data
-    chat_id = user.get("chat_id")
+    chat_id = user.data.get("chat_id")
 
-    if chat_id:
-        requests.post(
-            f"{TELEGRAM_API_URL}/sendMessage",
-            json={"chat_id": chat_id, "text": req.message},
-        )
+    if not chat_id:
+        return {"error": "User has not connected Telegram"}
 
-    send_email(req.email, "New Message", req.message)
+    telegram_response = requests.post(
+        f"{TELEGRAM_API_URL}/sendMessage",
+        json={"chat_id": chat_id, "text": req.message},
+    )
+
+    if telegram_response.status_code != 200:
+        return {"error": "Telegram send failed"}
+
     return {"status": "sent"}
+
 
 
 # ---------- Telegram Webhook ----------
