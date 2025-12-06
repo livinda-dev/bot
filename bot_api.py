@@ -10,6 +10,8 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 import base64
 from datetime import datetime
+import re
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -50,6 +52,36 @@ class MessageRequest(BaseModel):
     message: str
 
 
+def convert_html_to_telegram(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Remove unsupported tags entirely
+    for tag in soup(["img", "style", "script"]):
+        tag.decompose()
+
+    # Convert headings to bold text
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        tag.replace_with(f"<b>{tag.get_text(strip=True)}</b>\n")
+
+    # Convert list items to bullet points
+    for li in soup.find_all("li"):
+        text = li.get_text(strip=True)
+        li.replace_with(f"• {text}\n")
+
+    # Simplify links to Telegram-supported format
+    for a in soup.find_all("a", href=True):
+        text = a.get_text(strip=True)
+        href = a["href"]
+        a.replace_with(f'<a href="{href}">{text}</a>')
+
+    # Remove all inline styles + attributes
+    for tag in soup.find_all():
+        tag.attrs = {}
+
+    # Replace <div> and <p> with line breaks
+    return re.sub(r'\n\s*\n+', '\n\n', soup.get_text(separator="\n").strip())
+
+
 @app.post("/send-message")
 def send_message(req: MessageRequest):
     user = (
@@ -72,7 +104,7 @@ def send_message(req: MessageRequest):
         f"{TELEGRAM_API_URL}/sendMessage",
         json={
             "chat_id": chat_id, 
-            "text": req.message,
+            "text": convert_html_to_telegram(req.message),
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
             },
