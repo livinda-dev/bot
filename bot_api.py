@@ -111,9 +111,16 @@ def send_message(req: MessageRequest):
     )
 
     if telegram_response.status_code != 200:
-        return {"error": "Telegram send failed"}
+    print("---- TELEGRAM ERROR ----")
+    print("Status:", telegram_response.status_code)
+    print("Response:", telegram_response.text)
+    print("-----------------------")
 
-    return {"status": "sent"}
+    return {
+        "error": "Telegram send failed",
+        "telegram_error": telegram_response.text
+    }
+
 
 
 
