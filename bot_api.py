@@ -34,7 +34,7 @@ gmail_service = build("gmail", "v1", credentials=credentials)
 
 
 def send_email(to_email: str, subject: str, body: str):
-    message = MIMEText(body)
+    message = MIMEText(body,'html')
     message["to"] = to_email
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -70,7 +70,12 @@ def send_message(req: MessageRequest):
 
     telegram_response = requests.post(
         f"{TELEGRAM_API_URL}/sendMessage",
-        json={"chat_id": chat_id, "text": req.message},
+        json={
+            "chat_id": chat_id, 
+            "text": req.message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            },
     )
 
     if telegram_response.status_code != 200:
