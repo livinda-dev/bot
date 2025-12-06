@@ -82,6 +82,21 @@ def convert_html_to_telegram(html: str) -> str:
     return re.sub(r'\n\s*\n+', '\n\n', soup.get_text(separator="\n").strip())
 
 
+MAX_LENGTH = 4096
+
+def split_into_chunks(text, max_len=MAX_LENGTH):
+    chunks = []
+    while len(text) > max_len:
+        split_pos = text.rfind("\n", 0, max_len)
+        if split_pos == -1:
+            split_pos = max_len
+        chunks.append(text[:split_pos])
+        text = text[split_pos:].lstrip()
+    if text:
+        chunks.append(text)
+    return chunks
+
+
 @app.post("/send-message")
 def send_message(req: MessageRequest):
     user = (
@@ -100,26 +115,27 @@ def send_message(req: MessageRequest):
     if not chat_id:
         return {"error": "User has not connected Telegram"}
 
-    telegram_response = requests.post(
-        f"{TELEGRAM_API_URL}/sendMessage",
-        json={
-            "chat_id": chat_id, 
-            "text": convert_html_to_telegram(req.message),
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
+    telegram_text = convert_html_to_telegram(req.message)
+    chunks = split_into_chunks(telegram_text)
+
+    for i, chunk in enumerate(chunks, start=1):
+        resp = requests.post(
+            f"{TELEGRAM_API_URL}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": chunk,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False,
             },
-    )
+        )
+        if resp.status_code != 200:
+            print("---- TELEGRAM ERROR ----")
+            print("Status:", resp.status_code)
+            print("Response:", resp.text)
+            print("-----------------------")
+            return {"error": "Telegram send failed", "chunk": i}
 
-    if telegram_response.status_code != 200:
-        print("---- TELEGRAM ERROR ----")
-        print("Status:", telegram_response.status_code)
-        print("Response:", telegram_response.text)
-        print("-----------------------")
-
-        return {
-            "error": "Telegram send failed",
-            "telegram_error": telegram_response.text
-        }
+    return {"status": "sent", "chunks": len(chunks)}
 
 
 
