@@ -5,10 +5,6 @@ from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
 import json
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from email.mime.text import MIMEText
-import base64
 from datetime import datetime
 import re
 from bs4 import BeautifulSoup
@@ -22,33 +18,12 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# ---------- Gmail ----------
-token_data = json.loads(os.environ["GOOGLE_TOKEN_JSON"])
-credentials = Credentials(
-    token=token_data["token"],
-    refresh_token=token_data.get("refresh_token"),
-    client_id=token_data.get("client_id"),
-    client_secret=token_data.get("client_secret"),
-    token_uri=token_data.get("token_uri"),
-    scopes=["https://www.googleapis.com/auth/gmail.send"],
-)
-gmail_service = build("gmail", "v1", credentials=credentials)
-
-
-def send_email(to_email: str, subject: str, body: str):
-    message = MIMEText(body,'html')
-    message["to"] = to_email
-    message["subject"] = subject
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    gmail_service.users().messages().send(userId="me", body={"raw": raw}).execute()
-
-
 # ---------- FastAPI ----------
 app = FastAPI()
 
 
 class MessageRequest(BaseModel):
-    email: str
+    phone_number: str
     message: str
 
 
@@ -100,15 +75,15 @@ def split_into_chunks(text, max_len=MAX_LENGTH):
 @app.post("/send-message")
 def send_message(req: MessageRequest):
     user = (
-        supabase.table("user")
+        supabase.table("users")
         .select("chat_id")
-        .eq("email", req.email)
+        .eq("phone_number", req.phone_number)
         .maybe_single()
         .execute()
     )
 
     if not user or not user.data:
-        return {"error": "Email not registered"}
+        return {"error": "Phone number not registered"}
 
     chat_id = user.data.get("chat_id")
 
@@ -158,8 +133,8 @@ async def telegram_webhook(update: dict):
         # Check if user is already linked
         try:
             existing_user = (
-                supabase.table("user")
-                .select("email")
+                supabase.table("users")
+                .select("phone_number")
                 .eq("chat_id", str(chat_id))
                 .maybe_single()
                 .execute()
@@ -173,7 +148,7 @@ async def telegram_webhook(update: dict):
                         "chat_id": chat_id,
                         "text": (
                             f"✅ You're already connected to TAMDAN!\n\n"
-                            f"Linked email: {existing_user.data['email']}\n\n"
+                            f"Linked phone number: {existing_user.data['phone_number']}\n\n"
                             "You'll receive news updates here automatically."
                         ),
                     },
@@ -183,16 +158,16 @@ async def telegram_webhook(update: dict):
             print(f"Error checking existing user: {e}")
 
         if len(parts) == 2:
-            token_or_email = parts[1].strip()
+            token_or_phone = parts[1].strip()
 
             # Try token-based linking first (automatic from website)
-            if len(token_or_email) == 64:  # hex token is 64 chars
+            if len(token_or_phone) == 64:  # hex token is 64 chars
                 try:
                     # Verify token
                     token_result = (
                         supabase.table("telegram_tokens")
                         .select("*")
-                        .eq("token", token_or_email)
+                        .eq("token", token_or_phone)
                         .eq("used", False)
                         .maybe_single()
                         .execute()
@@ -222,24 +197,24 @@ async def telegram_webhook(update: dict):
                         )
                         return {"status": "token_expired"}
 
-                    email = token_data["email"]
+                    phone_number = token_data["phone_number"]
 
                     # Mark token as used
                     supabase.table("telegram_tokens").update({"used": True}).eq(
-                        "token", token_or_email
+                        "token", token_or_phone
                     ).execute()
 
                     # Link chat_id to user
                     requests.post(
                         "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
-                        json={"email": email, "chat_id": chat_id},
+                        json={"phone_number": phone_number, "chat_id": chat_id},
                     )
 
                     requests.post(
                         f"{TELEGRAM_API_URL}/sendMessage",
                         json={
                             "chat_id": chat_id,
-                            "text": f"✅ Successfully linked to {email}!\n\nYou'll now receive news updates here.",
+                            "text": f"✅ Successfully linked to {phone_number}!\n\nYou'll now receive news updates here.",
                         },
                     )
                     return {"status": "linked_via_token"}
@@ -255,13 +230,13 @@ async def telegram_webhook(update: dict):
                     )
                     return {"status": "error"}
 
-            # Fallback: manual email linking (old method)
-            email = token_or_email
+            # Fallback: manual phone linking (old method)
+            phone_number = token_or_phone
             try:
                 check = (
-                    supabase.table("user")
+                    supabase.table("users")
                     .select("*")
-                    .eq("email", email)
+                    .eq("phone_number", phone_number)
                     .maybe_single()
                     .execute()
                 )
@@ -278,19 +253,19 @@ async def telegram_webhook(update: dict):
                     json={
                         "chat_id": chat_id,
                         "text": (
-                            f"❌ The email *{email}* is not registered.\n\n"
+                            f"❌ The phone number *{phone_number}* is not registered.\n\n"
                             "Please log in first:\n"
                             "https://my-next-app-seven-delta.vercel.app/"
                         ),
                         "parse_mode": "Markdown",
                     },
                 )
-                return {"status": "email_not_found"}
+                return {"status": "phone_not_found"}
 
             # Save chat_id
             requests.post(
                 "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
-                json={"email": email, "chat_id": chat_id},
+                json={"phone_number": phone_number, "chat_id": chat_id},
             )
 
             requests.post(
@@ -309,7 +284,7 @@ async def telegram_webhook(update: dict):
                     "To link your account:\n"
                     "1. Log in at https://my-next-app-seven-delta.vercel.app/\n"
                     "2. Click 'Connect with Telegram' in your profile\n\n"
-                    "Or manually send: `/start your_email@example.com`"
+                    "Or manually send: `/start your_phone_number`"
                 ),
                 "parse_mode": "Markdown",
             },

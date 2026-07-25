@@ -4,7 +4,6 @@ requests==2.32.3
 python-dotenv==1.0.1
 supabase==2.5.1
 pydantic==2.12.3
-google-api-python-client==2.186.0
-google-auth==2.41.0
 python-multipart==0.0.6
 beautifulsoup4==4.12.2
+
