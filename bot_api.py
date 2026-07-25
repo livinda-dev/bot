@@ -204,15 +204,23 @@ async def telegram_webhook(update: dict):
                         "token", token_or_phone
                     ).execute()
 
-                    # Link chat_id to user
+                    # Link chat_id to user directly in Supabase
+                    try:
+                        supabase.table("users").update({"chat_id": str(chat_id)}).eq("phone_number", phone_number).execute()
+                        print(f"[save_chat_id] Successfully updated chat_id directly in Supabase for {phone_number}")
+                    except Exception as e:
+                        print(f"[save_chat_id] Direct Supabase update error: {e}")
+
+                    # Also notify Next.js Vercel API
                     save_payload = {"phone_number": phone_number, "chat_id": chat_id}
-                    print(f"[save_chat_id] Sending request (token flow): {save_payload}")
-                    save_resp = requests.post(
-                        "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
-                        json=save_payload,
-                    )
-                    print(f"[save_chat_id] Status: {save_resp.status_code}")
-                    print(f"[save_chat_id] Response: {save_resp.text}")
+                    try:
+                        save_resp = requests.post(
+                            "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
+                            json=save_payload,
+                        )
+                        print(f"[save_chat_id] Vercel API Status: {save_resp.status_code}, Response: {save_resp.text}")
+                    except Exception as e:
+                        print(f"[save_chat_id] Vercel API request error: {e}")
 
                     requests.post(
                         f"{TELEGRAM_API_URL}/sendMessage",
@@ -266,15 +274,23 @@ async def telegram_webhook(update: dict):
                 )
                 return {"status": "phone_not_found"}
 
-            # Save chat_id
+            # Save chat_id directly in Supabase
+            try:
+                supabase.table("users").update({"chat_id": str(chat_id)}).eq("phone_number", phone_number).execute()
+                print(f"[save_chat_id] Successfully updated chat_id directly in Supabase for {phone_number}")
+            except Exception as e:
+                print(f"[save_chat_id] Direct Supabase update error: {e}")
+
+            # Also notify Next.js Vercel API
             save_payload = {"phone_number": phone_number, "chat_id": chat_id}
-            print(f"[save_chat_id] Sending request (manual flow): {save_payload}")
-            save_resp = requests.post(
-                "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
-                json=save_payload,
-            )
-            print(f"[save_chat_id] Status: {save_resp.status_code}")
-            print(f"[save_chat_id] Response: {save_resp.text}")
+            try:
+                save_resp = requests.post(
+                    "https://my-next-app-seven-delta.vercel.app/api/bots/save_chat_id",
+                    json=save_payload,
+                )
+                print(f"[save_chat_id] Vercel API Status: {save_resp.status_code}, Response: {save_resp.text}")
+            except Exception as e:
+                print(f"[save_chat_id] Vercel API request error: {e}")
 
             requests.post(
                 f"{TELEGRAM_API_URL}/sendMessage",
