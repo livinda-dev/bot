@@ -149,7 +149,9 @@ async def telegram_webhook(update: dict):
                         "text": (
                             f"✅ You're already connected to TAMDAN!\n\n"
                             f"Linked phone number: {existing_user.data['phone_number']}\n\n"
-                            "You'll receive news updates here automatically."
+                            f"You'll receive news updates here automatically.\n\n"
+                            f"Daily news will send to you at 7:00AM Everyday base on your input topics.\n\n"
+                            "Thank you for using TAMDAN."
                         ),
                     },
                 )
